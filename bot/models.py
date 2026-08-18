@@ -51,6 +51,14 @@ class Conversation(models.Model):
         related_name="pending_conversations",
     )
 
+    pending_transfer_account = models.ForeignKey(
+        "finance.Account",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="pending_transfer_conversations",
+    )
+
     pending_description = models.CharField(
         max_length=255,
         blank=True,

@@ -56,6 +56,7 @@ class Transaction(models.Model):
     TRANSACTION_TYPES = [
         ("INCOME", "Ingreso"),
         ("EXPENSE", "Gasto"),
+        ("TRANSFER", "Transferencia"),
     ]
 
     user = models.ForeignKey(
@@ -68,9 +69,18 @@ class Transaction(models.Model):
         on_delete=models.CASCADE,
         related_name="transactions"
     )
+    transfer_account = models.ForeignKey(
+        Account,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="incoming_transfers",
+    )
     category = models.ForeignKey(
         Category,
         on_delete=models.PROTECT,
+        null=True,
+        blank=True,
         related_name="transactions"
     )
 
