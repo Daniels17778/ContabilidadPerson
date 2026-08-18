@@ -1,6 +1,147 @@
 import re
+import unicodedata
 from decimal import Decimal
 
+
+def normalize(text):
+    """
+    Pasa el texto a minúsculas y le quita las tildes,
+    para que "cuánto" y "cuanto" (o "gasté" y "gaste")
+    se traten como lo mismo sin tener que listar cada
+    variante a mano.
+    """
+
+    text = text.lower().strip()
+
+    text = unicodedata.normalize("NFD", text)
+    text = "".join(
+        char for char in text
+        if unicodedata.category(char) != "Mn"
+    )
+
+    return text
+
+
+def contains_any(text, phrases):
+    return any(phrase in text for phrase in phrases)
+
+
+# --------------------------------------------------------
+# CATEGORÍAS
+#
+# Única fuente de verdad. Antes existían dos diccionarios
+# de categorías (uno en detect_category y otro en
+# detect_category_query) que se fueron desincronizando.
+# Ahora ambas funciones usan este mismo diccionario.
+#
+# Las palabras clave van SIN tilde porque el texto de
+# entrada se normaliza antes de comparar.
+# --------------------------------------------------------
+
+CATEGORY_KEYWORDS = {
+    "alimentación": [
+        "comida",
+        "almuerzo",
+        "desayuno",
+        "cena",
+        "restaurante",
+        "mercado",
+        "domicilio",
+    ],
+    "transporte": [
+        "transporte",
+        "bus",
+        "buseta",
+        "taxi",
+        "uber",
+        "indrive",
+        "gasolina",
+        "pasaje",
+        "peaje",
+    ],
+    "arriendo": [
+        "arriendo",
+        "alquiler",
+    ],
+    "entretenimiento": [
+        "cine",
+        "juego",
+        "videojuego",
+        "entretenimiento",
+        "streaming",
+        "netflix",
+    ],
+    "salud": [
+        "medicina",
+        "farmacia",
+        "medico",
+        "salud",
+        "droguería",
+        "eps",
+    ],
+    "ropa": [
+        "ropa",
+        "camisa",
+        "pantalon",
+        "zapatos",
+        "tenis",
+    ],
+    "tecnología": [
+        "celular",
+        "computador",
+        "pc",
+        "audifonos",
+        "tecnologia",
+        "cargador",
+    ],
+    # Nota: "pago" a propósito NO está aquí porque es
+    # demasiado genérico (aparece en casi cualquier frase
+    # de gasto) y hacía que cosas como "hice un pago de
+    # arriendo" se clasificaran como salario.
+    "salario": [
+        "salario",
+        "sueldo",
+        "nomina",
+    ],
+}
+
+
+def detect_category(text):
+    text = normalize(text)
+
+    for category, keywords in CATEGORY_KEYWORDS.items():
+        if contains_any(text, keywords):
+            return category
+
+    return None
+
+
+def detect_category_query(text):
+    """
+    Solo detecta categoría cuando el mensaje es explícitamente
+    una consulta ("cuánto gasté en...", "gastos en...").
+    Reutiliza el mismo diccionario que detect_category.
+    """
+
+    text = normalize(text)
+
+    query_words = [
+        "cuanto gaste en",
+        "cuanto he gastado en",
+        "cuanto llevo gastado en",
+        "gasto en",
+        "gastos en",
+    ]
+
+    if not contains_any(text, query_words):
+        return None
+
+    return detect_category(text)
+
+
+# --------------------------------------------------------
+# MONTOS
+# --------------------------------------------------------
 
 def parse_amount(text):
     """
@@ -16,20 +157,19 @@ def parse_amount(text):
     $15.000
     """
 
-    text = text.lower().strip()
+    text = normalize(text)
 
     # --------------------------------
     # MILLONES
     # --------------------------------
 
     match = re.search(
-        r'(\d+(?:[.,]\d+)?)\s*(millón|millones|millon|millones)\b',
+        r'(\d+(?:[.,]\d+)?)\s*(millon|millones)\b',
         text
     )
 
     if match:
         number = match.group(1).replace(",", ".")
-
         return Decimal(number) * 1_000_000
 
     # --------------------------------
@@ -43,7 +183,6 @@ def parse_amount(text):
 
     if match:
         number = match.group(1).replace(",", ".")
-
         return Decimal(number) * 1000
 
     # --------------------------------
@@ -56,11 +195,7 @@ def parse_amount(text):
     )
 
     if match:
-        number = (
-            match.group(1)
-            .replace(".", "")
-        )
-
+        number = match.group(1).replace(".", "")
         return Decimal(number)
 
     # --------------------------------
@@ -73,21 +208,14 @@ def parse_amount(text):
     )
 
     if match:
-        number = (
-            match.group(1)
-            .replace(",", "")
-        )
-
+        number = match.group(1).replace(",", "")
         return Decimal(number)
 
     # --------------------------------
     # NÚMERO SIMPLE
     # --------------------------------
 
-    match = re.search(
-        r'\$?\s*(\d+)',
-        text
-    )
+    match = re.search(r'\$?\s*(\d+)', text)
 
     if match:
         return Decimal(match.group(1))
@@ -95,103 +223,93 @@ def parse_amount(text):
     return None
 
 
+# --------------------------------------------------------
+# TIPO DE MOVIMIENTO
+# --------------------------------------------------------
+
+INCOME_WORDS = [
+    "recibi",
+    "ingreso",
+    "me consignaron",
+    "consignaron",
+    "salario",
+    "sueldo",
+    "pago recibido",
+    "me pagaron",
+    "me depositaron",
+]
+
+# Palabras "fuertes": si aparecen, es gasto casi seguro.
+# Nota: "pago" se revisa DESPUÉS de INCOME_WORDS en
+# detect_transaction_type, así que "recibí un pago" sigue
+# clasificando bien como INCOME. Aquí solo cubre casos
+# como "hice un pago de arriendo".
+EXPENSE_WORDS = [
+    "gaste",
+    "compre",
+    "pague",
+    "comprar",
+    "gasto",
+    "pago",
+]
+
+
 def detect_transaction_type(text):
-    text = text.lower()
+    text = normalize(text)
 
-    income_words = [
-        "recibí",
-        "recibi",
-        "ingresó",
-        "ingreso",
-        "me consignaron",
-        "consignaron",
-        "salario",
-        "sueldo",
-        "pago recibido",
-        "me pagaron",
-    ]
+    if contains_any(text, INCOME_WORDS):
+        return "INCOME"
 
-    expense_words = [
-        "gasté",
-        "gaste",
-        "gasté",
-        "compré",
-        "compre",
-        "pagué",
-        "pague",
-        "comprar",
-        "gasto",
-        "pago",
-    ]
-
-    for word in income_words:
-        if word in text:
-            return "INCOME"
-
-    for word in expense_words:
-        if word in text:
-            return "EXPENSE"
+    if contains_any(text, EXPENSE_WORDS):
+        return "EXPENSE"
 
     return None
 
+
+TRANSFER_WORDS = [
+    "pase",
+    "transferi",
+    "movi",
+    "envie",
+]
+
+
 def detect_transfer(text):
-    text = text.lower()
+    text = normalize(text)
+    return contains_any(text, TRANSFER_WORDS)
 
-    transfer_words = [
-        "pasé",
-        "pase",
-        "transferí",
-        "transferi",
-        "moví",
-        "movi",
-        "envié",
-        "envie",
-    ]
 
-    for word in transfer_words:
-        if word in text:
-            return True
+# --------------------------------------------------------
+# CUENTAS
+# --------------------------------------------------------
 
-    return False
+BALANCE_WORDS = [
+    "cuanto tengo",
+    "cuanta plata tengo",
+    "cuanto dinero tengo",
+    "cual es mi saldo",
+    "mi saldo",
+    "mis cuentas",
+    "cuanto hay",
+]
+
 
 def detect_balance_query(text):
-    text = text.lower()
+    text = normalize(text)
+    return contains_any(text, BALANCE_WORDS)
 
-    balance_words = [
-        "cuánto tengo",
-        "cuanto tengo",
-        "cuánta plata tengo",
-        "cuanta plata tengo",
-        "cuánto dinero tengo",
-        "cuanto dinero tengo",
-        "cuál es mi saldo",
-        "cual es mi saldo",
-        "mi saldo",
-        "mis cuentas",
-        "cuánto hay",
-        "cuanto hay",
-    ]
-
-    for phrase in balance_words:
-        if phrase in text:
-            return True
-
-    return False
 
 def parse_balance_account(text):
-    text = text.lower()
+    text = normalize(text)
 
-    accounts = [
-        "nequi",
-        "bancolombia",
-        "efectivo",
-    ]
+    accounts = ["nequi", "bancolombia", "efectivo"]
 
     for account in accounts:
         if account in text:
             return account
 
     return None
+
 
 def parse_transfer_accounts(text):
     """
@@ -201,7 +319,7 @@ def parse_transfer_accounts(text):
     desde Nequi hacia Bancolombia
     """
 
-    text = text.lower()
+    text = normalize(text)
 
     match = re.search(
         r"(?:de|desde)\s+(.+?)\s+(?:a|hacia)\s+(.+)",
@@ -216,92 +334,139 @@ def parse_transfer_accounts(text):
 
     return source, destination
 
-def detect_category(text):
-    text = text.lower()
 
-    categories = {
-        "alimentación": [
-            "comida",
-            "almuerzo",
-            "desayuno",
-            "cena",
-            "comida",
-            "restaurante",
-            "mercado",
-        ],
+# --------------------------------------------------------
+# CONSULTAS
+# --------------------------------------------------------
 
-        "transporte": [
-            "transporte",
-            "bus",
-            "buseta",
-            "taxi",
-            "uber",
-            "indrive",
-            "gasolina",
-            "pasaje",
-        ],
+QUERY_BALANCE_WORDS = [
+    "cuanto tengo",
+    "saldo",
+    "dinero tengo",
+    "plata tengo",
+]
 
-        "arriendo": [
-            "arriendo",
-            "alquiler",
-        ],
+QUERY_EXPENSE_WORDS = [
+    "cuanto gaste",
+    "cuanto he gastado",
+    "total de gastos",
+    "mis gastos",
+]
 
-        "entretenimiento": [
-            "cine",
-            "juego",
-            "videojuego",
-            "entretenimiento",
-        ],
+QUERY_INCOME_WORDS = [
+    "cuanto recibi",
+    "cuanto he recibido",
+    "total de ingresos",
+    "mis ingresos",
+]
 
-        "salud": [
-            "medicina",
-            "farmacia",
-            "médico",
-            "medico",
-            "salud",
-        ],
+QUERY_SUMMARY_WORDS = [
+    "como estan mis gastos",
+    "como estuvieron mis gastos",
+    "como estan mis finanzas",
+    "como estuvieron mis finanzas",
+    "como van mis finanzas",
+    "resumen de mis gastos",
+    "resumen de mis finanzas",
+    "resumen financiero",
+]
 
-        "ropa": [
-            "ropa",
-            "camisa",
-            "pantalón",
-            "zapatos",
-            "tenis",
-        ],
 
-        "tecnología": [
-            "celular",
-            "computador",
-            "pc",
-            "audífonos",
-            "audifonos",
-            "tecnología",
-            "tecnologia",
-        ],
+def detect_query_type(text):
+    text = normalize(text)
 
-        "salario": [
-            "salario",
-            "sueldo",
-            "nómina",
-            "nomina",
-            "pago",
-        ],
-    }
+    if contains_any(text, QUERY_BALANCE_WORDS):
+        return "BALANCE"
 
-    for category, keywords in categories.items():
-        for keyword in keywords:
-            if keyword in text:
-                return category
+    if contains_any(text, QUERY_SUMMARY_WORDS):
+        return "MONTH_SUMMARY"
+
+    if contains_any(text, QUERY_EXPENSE_WORDS):
+        return "EXPENSE_TOTAL"
+
+    if contains_any(text, QUERY_INCOME_WORDS):
+        return "INCOME_TOTAL"
 
     return None
 
+
+PERIOD_MAP = [
+    ("hoy", "TODAY"),
+    ("ayer", "YESTERDAY"),
+    ("esta semana", "WEEK"),
+    ("mes pasado", "LAST_MONTH"),
+    ("este mes", "MONTH"),
+    ("mes actual", "MONTH"),
+]
+
+
+def detect_period(text):
+    text = normalize(text)
+
+    for phrase, period in PERIOD_MAP:
+        if phrase in text:
+            return period
+
+    return None
+
+
+TOP_EXPENSE_PHRASES = [
+    "en que estoy gastando mas",
+    "cual es mi mayor gasto",
+    "en que categoria gasto mas",
+    "en que gasto mas",
+    "donde gasto mas",
+]
+
+
+def detect_top_expense_query(text):
+    text = normalize(text)
+    return contains_any(text, TOP_EXPENSE_PHRASES)
+
+
+EXPENSES_BREAKDOWN_PHRASES = [
+    "en que gaste",
+    "en que he gastado",
+    "en que estoy gastando",
+    "como estan mis gastos",
+    "desglose de gastos",
+    "desglose mis gastos",
+]
+
+
+def detect_expenses_breakdown_query(text):
+    text = normalize(text)
+    return contains_any(text, EXPENSES_BREAKDOWN_PHRASES)
+
+
+INCOME_BREAKDOWN_PHRASES = [
+    "en que recibi",
+    "en que he recibido",
+    "de donde vienen mis ingresos",
+    "de donde viene mi dinero",
+    "desglose de ingresos",
+    "desglose de mis ingresos",
+    "en que recibi plata",
+]
+
+
+def detect_income_breakdown_query(text):
+    text = normalize(text)
+    return contains_any(text, INCOME_BREAKDOWN_PHRASES)
+
+
+# --------------------------------------------------------
+# PUNTO DE ENTRADA
+# --------------------------------------------------------
+
 def parse_message(text):
-    category_query = detect_category_query(text)
     period = detect_period(text)
 
     # --------------------------------
     # CONSULTA POR CATEGORÍA
     # --------------------------------
+
+    category_query = detect_category_query(text)
 
     if category_query:
         return {
@@ -316,7 +481,7 @@ def parse_message(text):
         }
 
     # --------------------------------
-    # DESGLOSE DE INGRESOS
+    # DESGLOSES Y CONSULTAS ESPECIALES
     # --------------------------------
 
     if detect_income_breakdown_query(text):
@@ -356,7 +521,7 @@ def parse_message(text):
         }
 
     # --------------------------------
-    # OTRAS CONSULTAS
+    # OTRAS CONSULTAS (saldo, resumen, totales)
     # --------------------------------
 
     query_type = detect_query_type(text)
@@ -394,239 +559,3 @@ def parse_message(text):
         "period": period,
         "original_text": text,
     }
-
-    
-def detect_query_type(text):
-    text = text.lower()
-
-    balance_words = [
-        "cuánto tengo",
-        "cuanto tengo",
-        "saldo",
-        "dinero tengo",
-        "plata tengo",
-    ]
-
-    expense_words = [
-        "cuánto gasté",
-        "cuanto gaste",
-        "cuánto he gastado",
-        "cuanto he gastado",
-        "total de gastos",
-        "mis gastos",
-    ]
-
-    income_words = [
-        "cuánto recibí",
-        "cuanto recibi",
-        "cuánto he recibido",
-        "cuanto he recibido",
-        "total de ingresos",
-        "mis ingresos",
-    ]
-
-    summary_words = [
-        # Gastos
-        "cómo están mis gastos",
-        "como estan mis gastos",
-        "cómo estuvieron mis gastos",
-        "como estuvieron mis gastos",
-
-        # Finanzas
-        "cómo están mis finanzas",
-        "como estan mis finanzas",
-        "cómo estuvieron mis finanzas",
-        "como estuvieron mis finanzas",
-
-        # Otras formas
-        "cómo van mis finanzas",
-        "como van mis finanzas",
-        "resumen de mis gastos",
-        "resumen de mis finanzas",
-        "resumen financiero",
-    ]
-
-    if any(word in text for word in balance_words):
-        return "BALANCE"
-
-    if any(word in text for word in summary_words):
-        return "MONTH_SUMMARY"
-
-    if any(word in text for word in expense_words):
-        return "EXPENSE_TOTAL"
-
-    if any(word in text for word in income_words):
-        return "INCOME_TOTAL"
-
-    return None
-
-
-def detect_category_query(text):
-    text = text.lower()
-
-    query_words = [
-        "cuánto gasté en",
-        "cuanto gaste en",
-        "cuánto he gastado en",
-        "cuanto he gastado en",
-        "cuánto llevo gastado en",
-        "cuanto llevo gastado en",
-        "gasto en",
-        "gastos en",
-    ]
-
-    if not any(word in text for word in query_words):
-        return None
-
-    categories = {
-        "alimentación": [
-            "alimentación",
-            "alimentacion",
-            "comida",
-            "almuerzo",
-            "desayuno",
-            "cena",
-            "restaurante",
-            "mercado",
-        ],
-
-        "transporte": [
-            "transporte",
-            "bus",
-            "buseta",
-            "taxi",
-            "uber",
-            "indrive",
-            "gasolina",
-            "pasaje",
-        ],
-
-        "arriendo": [
-            "arriendo",
-            "alquiler",
-        ],
-
-        "entretenimiento": [
-            "entretenimiento",
-            "cine",
-            "juego",
-            "videojuego",
-        ],
-
-        "salud": [
-            "salud",
-            "medicina",
-            "farmacia",
-            "médico",
-            "medico",
-        ],
-
-        "ropa": [
-            "ropa",
-            "camisa",
-            "pantalón",
-            "zapatos",
-            "tenis",
-        ],
-
-        "tecnología": [
-            "tecnología",
-            "tecnologia",
-            "celular",
-            "computador",
-            "pc",
-            "audífonos",
-            "audifonos",
-        ],
-    }
-
-    for category, keywords in categories.items():
-        for keyword in keywords:
-            if keyword in text:
-                return category
-
-    return None
-
-def detect_period(text):
-    text = text.lower()
-
-    if "hoy" in text:
-        return "TODAY"
-
-    if "ayer" in text:
-        return "YESTERDAY"
-
-    if "esta semana" in text:
-        return "WEEK"
-
-    if "este mes" in text or "mes actual" in text:
-        return "MONTH"
-
-    if "mes pasado" in text:
-        return "LAST_MONTH"
-
-    return None
-
-def detect_top_expense_query(text):
-    text = text.lower()
-
-    phrases = [
-        "en qué estoy gastando más",
-        "en que estoy gastando mas",
-        "cuál es mi mayor gasto",
-        "cual es mi mayor gasto",
-        "en qué categoría gasto más",
-        "en que categoria gasto mas",
-        "en qué gasto más",
-        "en que gasto mas",
-        "dónde gasto más",
-        "donde gasto mas",
-    ]
-
-    for phrase in phrases:
-        if phrase in text:
-            return True
-
-    return False
-
-def detect_expenses_breakdown_query(text):
-    text = text.lower()
-
-    phrases = [
-        "en qué gasté",
-        "en que gaste",
-        "en qué he gastado",
-        "en que he gastado",
-        "en qué estoy gastando",
-        "en que estoy gastando",
-        "cómo están mis gastos",
-        "como estan mis gastos",
-        "desglose de gastos",
-        "desglose mis gastos",
-    ]
-
-    for phrase in phrases:
-        if phrase in text:
-            return True
-
-    return False
-
-def detect_income_breakdown_query(text):
-    text = text.lower()
-
-    phrases = [
-        "en qué recibí",
-        "en que recibi",
-        "en qué he recibido",
-        "en que he recibido",
-        "de dónde vienen mis ingresos",
-        "de donde vienen mis ingresos",
-        "de dónde viene mi dinero",
-        "de donde viene mi dinero",
-        "desglose de ingresos",
-        "desglose de mis ingresos",
-        "en qué recibí plata",
-        "en que recibi plata",
-    ]
-
-    return any(phrase in text for phrase in phrases)

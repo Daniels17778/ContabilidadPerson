@@ -6,6 +6,7 @@ class Conversation(models.Model):
     STATES = [
         ("IDLE", "Inactiva"),
         ("WAITING_FOR_ACCOUNT", "Esperando cuenta"),
+        ("WAITING_FOR_TRANSFER_DESTINATION", "Esperando cuenta destino"),
         ("WAITING_FOR_CATEGORY", "Esperando categoría"),
         ("WAITING_FOR_AMOUNT", "Esperando monto"),
         ("CONFIRMING", "Esperando confirmación"),
@@ -18,7 +19,7 @@ class Conversation(models.Model):
     )
 
     state = models.CharField(
-        max_length=30,
+        max_length=40,
         choices=STATES,
         default="IDLE",
     )

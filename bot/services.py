@@ -977,6 +977,28 @@ def chat(user, text):
 
             return response
 
+        # Si es una transferencia, esta cuenta es el origen
+        # y todavía falta pedir la cuenta destino.
+
+        if conversation.pending_type == "TRANSFER":
+
+            conversation.pending_account = account
+            conversation.state = "WAITING_FOR_TRANSFER_DESTINATION"
+            conversation.save()
+
+            response = (
+                f"¿A qué cuenta quieres transferir "
+                f"${conversation.pending_amount:,.0f}?"
+            )
+
+            save_message(
+                conversation,
+                "BOT",
+                response,
+            )
+
+            return response
+
         conversation.pending_account = account
         conversation.state = "CONFIRMING"
         conversation.save()
@@ -990,6 +1012,66 @@ def chat(user, text):
             f"de ${amount:,.0f} "
             f"en {category.name} "
             f"desde {account.name}?"
+        )
+
+        save_message(
+            conversation,
+            "BOT",
+            response,
+        )
+
+        return response
+
+    # --------------------------------
+    # ESPERANDO CUENTA DESTINO (TRANSFERENCIA)
+    # --------------------------------
+
+    if conversation.state == "WAITING_FOR_TRANSFER_DESTINATION":
+
+        destination_account = find_account(user, text)
+
+        if destination_account is None:
+
+            response = (
+                "No encontré esa cuenta. "
+                "Escribe el nombre de la cuenta destino, "
+                "por ejemplo: Nequi."
+            )
+
+            save_message(
+                conversation,
+                "BOT",
+                response,
+            )
+
+            return response
+
+        if destination_account == conversation.pending_account:
+
+            response = (
+                "La cuenta de origen y destino deben ser diferentes. "
+                "¿A qué otra cuenta quieres transferir?"
+            )
+
+            save_message(
+                conversation,
+                "BOT",
+                response,
+            )
+
+            return response
+
+        conversation.pending_transfer_account = destination_account
+        conversation.state = "CONFIRMING"
+        conversation.save()
+
+        source_account = conversation.pending_account
+
+        response = (
+            f"¿Confirmas transferir "
+            f"${conversation.pending_amount:,.0f} "
+            f"de {source_account.name} "
+            f"a {destination_account.name}?"
         )
 
         save_message(
