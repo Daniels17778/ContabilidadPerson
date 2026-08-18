@@ -1,7 +1,7 @@
 
 from django.db import transaction
 from django.db.models import Sum
-from datetime import date, timedelta
+from datetime import date as _date, timedelta
 from decimal import Decimal
 from django.db import models
 
@@ -20,6 +20,10 @@ def register_expense(
     description="",
     date=None,
 ):
+
+    if date is None:
+        date = _date.today()
+
     amount = Decimal(amount)
 
     if amount <= 0:
@@ -65,6 +69,9 @@ def register_income(
     description="",
     date=None,
 ):
+    if date is None:
+        date = _date.today()
+
     amount = Decimal(amount)
 
     if amount <= 0:
@@ -104,6 +111,10 @@ def transfer_money(
     description="",
     date=None,
 ):
+
+    if date is None:
+        date = _date.today()
+            
     amount = Decimal(amount)
 
     if amount <= 0:
@@ -359,7 +370,7 @@ def get_income_by_category(
     ]
 
 def get_current_month_summary(user):
-    today = date.today()
+    today = _date.today()
 
     start_date = today.replace(day=1)
     end_date = today
@@ -387,7 +398,7 @@ def get_current_month_summary(user):
     }
 
 def get_period_dates(period):
-    today = date.today()
+    today = _date.today()
 
     if period == "TODAY":
         return today, today
